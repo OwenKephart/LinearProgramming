@@ -1,11 +1,20 @@
-
-#import scipy.optimize.linprog
+from scipy.optimize import linprog
 import re
 
 
 class Solver:
 
     def __init__(self):
+        pass
+
+
+    def create_LP(self):
+        c = [] #coeffs of objective func
+        A_ub = [] # 2D matrix for upper bound consts
+        b_ub = [] # 1D vector for upper bound rhs
+        A_eq = [] # 2D matrix for eq consts
+        b_eq = [] # 1D vector for eq rhs
+        bounds = [(0,None)] # for the x vector
         pass
 
 
