@@ -19,7 +19,7 @@ students to take the course"), or percentage (such as "I want men to make up at 
 The parser will automatically take this plaintext file and formulate it into
 a linear program, which is then solved using scipy's linear program solver.
 
-## Future Goals
+## Future Work
 
 This is very much a work in progress, but I hope to extend this to allow a
 richer set of goals. Currently, goals are prioritized one after another (meaning
