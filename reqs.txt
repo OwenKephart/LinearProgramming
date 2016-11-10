@@ -1,0 +1,35 @@
+# add as many as you like
++categories
+    gender:         male, female
+    class_year:     1, 2, 3, 4
+
+# if you don’t define a value, the default is zero
++applicants
+    in[gender=male, class_year=1]: 100
+    in[gender=male, class_year=2]: 90
+    in[gender=male, class_year=3]: 80
+    in[gender=male, class_year=4]: 70
+    in[gender=female, class_year=1]: 60
+    in[gender=female, class_year=2]: 50
+    in[gender=female, class_year=3]: 40
+    in[gender=female, class_year=4]: 30
+
+# these MUST be fulfilled in order to have a valid output
++requirements
+    # max 150 students
+    numeric: out[] <= 150
+    # at least 85pct of first year applicants get in
+    numeric: out[class_year=1] >= .85*in[class_year=1]
+    # at least 5 seniors in the class
+    numeric: out[class_year=4] >= 5 
+    # class is at most 60pct male
+    percent: out[gender=male] <= .6
+    # class is at least 15pct female first years
+    percent: out[gender=female,class_year=1] >= .15
+        
+# order based on priority (highest first)
++goals
+    # want to try to get the female percentage to 45pct
+    percent: out[gender=female] >= .45
+    # minimize number of seniors rejected
+    numeric: out[class_year=4] == in[class_year=4]

@@ -1,4 +1,5 @@
 from scipy.optimize import linprog
+import numpy as np
 import re
 
 
@@ -8,14 +9,60 @@ class Solver:
         pass
 
 
+    # parse the requirements file and generate numpy arrays to use as input
+    # to the solver
     def create_LP(self):
-        c = [] #coeffs of objective func
-        A_ub = [] # 2D matrix for upper bound consts
-        b_ub = [] # 1D vector for upper bound rhs
-        A_eq = [] # 2D matrix for eq consts
-        b_eq = [] # 1D vector for eq rhs
-        bounds = [(0,None)] # for the x vector
-        pass
+        p = Parser()
+        reqs, goals = p.parse_file("reqs.txt")
+        A_eq, b_eq, A_ub, b_ub, c = self.get_components(reqs, goals)
+        A_eq = np.array(A_eq) 
+        b_eq = np.array(b_eq) 
+        A_ub = np.array(A_ub) 
+        b_ub = np.array(b_ub) 
+        c = np.array(c)
+
+        res = linprog(c, A_ub, b_ub, A_eq, b_eq)
+        print res.x, res.status, res.message
+
+    # turn the parsed constraints into arrays
+    def get_components(self, reqs, goals):
+
+        num_cats = len(goals[0][1])
+        num_goals = len(goals)
+
+        # minimization problem, so negate
+        c = [-1]*(num_cats) + [0]*(2*num_goals)
+        A_eq = []
+        b_eq = []
+        A_ub = []
+        b_ub = []
+
+        # empty arrays as padding for requirements
+        goal_weights = [0]*(2*num_goals)
+        for req in reqs:
+            if req[0] == '==':
+                A_eq.append(req[1]+goal_weights)
+                b_eq.append(req[2])
+            elif req[0] == '<=':
+                A_ub.append(req[1]+goal_weights)
+                b_ub.append(req[2])
+
+        # generate the positive and negative auxillary variables
+        for (i, goal) in enumerate(goals):
+            goal_weights = [0, 0]*(i) + [1, -1] + [0, 0]*(num_goals-i-1)
+            # choose the weights in the objective function
+            if goal[0] == '==':
+                c[num_cats+i] = 1
+                c[num_cats+i+1] = 1
+            elif goal[0] == '<=':
+                c[num_cats+i] = 1  
+                c[num_cats+i+1] = 0 # don't care about x_i-
+            A_eq.append(goal[1] + goal_weights)
+            b_eq.append(goal[2])
+
+        return (A_eq, b_eq, A_ub, b_ub, c)
+
+
 
 
 class Parser:
@@ -37,8 +84,8 @@ class Parser:
         # get the set of categories
         cats = self.parse_cats(
                 self.get_slice(contents, header_locs.get(self.CAT_H)))
-        # all the possible combinations of members
-        #member_combos = self.get_member_combos(cats)
+        # useful later on
+        self.setup_vars(cats)
 
         # get the input values
         vals = self.parse_vals(cats,
@@ -47,12 +94,11 @@ class Parser:
         # get the requirement and goal data
         reqs = self.parse_constraints(cats, vals,
                 self.get_slice(contents, header_locs.get(self.REQ_H)))
-
         goals = self.parse_constraints(cats, vals,
                 self.get_slice(contents, header_locs.get(self.GOAL_H)))
 
-        print(reqs)
-        print(goals)
+        return (reqs, goals)
+
 
     # useful for debugging
     def print_data(self, data):
@@ -87,7 +133,6 @@ class Parser:
                 continue
 
             # parse the pattern
-            # (i.e. "in[gender=male,class_year=1] -> [(gender,male),(class_year,1)]
             pattern = self.get_pattern(lhs)
             # make sure this is a valid thing (i.e. not in[(zzx, 1)])
             if not self.check_pattern(cats, pattern, req_all=True):
@@ -117,11 +162,53 @@ class Parser:
                 continue
             if kind == "numeric":
                 consts.append(self.parse_ineq_numeric(cats, vals, ineq))
+            if kind == "percent":
+                consts.append(self.parse_ineq_ratio(cats, vals, ineq))
             
         return consts
 
-    # parses an inequality
+    # parses a ratio inequality
+    def parse_ineq_ratio(self, cats, vals, ineq):
+
+        # get what it would be without the division
+        (op, lhs, rhs) = self.parse_ineq_numeric(cats, vals, ineq)
+
+        # denominator is all values with weight 1
+        lhs_den = [1]*self.var_num
+
+        # cross multiply
+        rhs = self.weights_mult(lhs_den, -rhs)
+
+        # subtract weights (add because negated in previous line)
+        lhs_new = self.weights_add(lhs,rhs) 
+
+        # will always have zero on rhs
+        return (op, lhs_new, 0)
+
+    # parses a numeric inequality
     def parse_ineq_numeric(self, cats, vals, ineq):
+
+        (op, lhs, rhs) = self.split_on_operation(ineq)
+
+        lhs = self.parse_lhs(cats,vals,lhs)
+        rhs = self.parse_rhs(cats,vals,rhs)
+
+        # make sure these are either equlity or upper bound constraints
+        if op == self.GREATER:
+            return (self.LESS, self.weights_mult(lhs, -1), -1*rhs)
+
+        return (op, lhs, rhs)
+
+    # weight all elements by a constant
+    def weights_mult(self, weights, a):
+        return [a*x for x in weights]
+
+    # add two weight sets together
+    def weights_add(self, w1, w2):
+        return [a+b for a, b  in zip(w1,w2)]
+
+    # figures out the operation and returns the split on it
+    def split_on_operation(self, ineq):
 
         m_op = None
         for op in self.OPS:
@@ -134,12 +221,22 @@ class Parser:
         if m_op is None:
             self.error(-1, "Invalid operation: \"" + ineq + "\"")
 
-        lhs = self.parse_lhs(cats,vals,lhs)
-        rhs = self.parse_rhs(cats,vals,rhs)
         return (m_op, lhs, rhs)
 
+    # return a list of all decision variables associated with index
+    def setup_vars(self, cats):
+        self.var_inds = {}
+        all_pats = self.get_patterns_matching(cats, [])
+        for (i, pat) in enumerate(all_pats):
+            self.var_inds[self.pattern_to_string(cats, pat)] = i
+        self.var_num = len(all_pats)
+
+    # get the index of a variable based on its pattern
+    def get_var_index(self, cats, pat):
+        return self.var_inds[self.pattern_to_string(cats, pat)]
+
     # look for all the output variables and their coefficients
-    # return a list of coefficients and associated output variables 
+    # return a list of coefficients of every variable
     def parse_lhs(self, cats, vals, s):
         # regex magic
         p = re.compile("(?:\d*\.\d+\*)?out\[(?:\w+=\w+,*)*\]")
@@ -147,14 +244,16 @@ class Parser:
         exprs = [self.parse_expr(x) for x in p.findall(s)]
 
         # expand out expressions
-        full_exprs = []
+        weights = [0]*self.var_num
         for expr in exprs:
-            if not self.check_pattern(cats,expr[1]): # make sure valid
+            print expr
+            if not self.check_pattern(cats, expr[1]): # make sure valid
                 self.error(-1, "Invalid membership: \"" + s + "\"")
             matches = self.get_patterns_matching(cats, expr[1])
             for match in matches:
-                full_exprs.append((expr[0], match))
-        return full_exprs
+                weights[self.get_var_index(cats, match)] += expr[0]
+
+        return weights
 
     # look for all the input variables and their coefficients
     # return the numerical sum
@@ -197,13 +296,19 @@ class Parser:
     def get_val(self, cats, vals, pattern):
         all_matches = self.get_patterns_matching(cats, pattern)
         queries = [self.pattern_to_string(cats, x) for x in all_matches]
-        vals = [vals[x] for x in queries]
+        vals = [vals.get(x,0) for x in queries]
         return sum(vals)
+
+    # just ensures that a string pattern has the proper format
+    def format_pattern(self, cats, s):
+        return self.pattern_to_string(cats, self.get_pattern(s))
 
     # turn a string into a pattern (it works, but it doesn't detect errors
     # too well - usually they will be caught later though)
     def get_pattern(self, s):
         s = s[s.find(self.OPEN_CHAR)+1:s.find(self.CLOSE_CHAR)].strip(self.SEP_CHAR)
+        if len(s) == 0: # check for empty sey of braces
+            return []
         pattern = [x.split(self.EQ_CHAR) for x in s.split(self.SEP_CHAR)]
         return pattern
 
@@ -377,9 +482,8 @@ class Parser:
     EQUAL = "=="
     OPS = [LESS,GREATER,EQUAL]
 
-
-p = Parser()
-p.parse_file("reqs.txt")
+s = Solver()
+s.create_LP()
 
 
 
